@@ -10,6 +10,7 @@ from typing import List, Literal
 import fastrand
 
 from synthetic_vcf_generator import vcf_reference, version
+from synthetic_vcf_generator.bed_parser import BEDIntervals
 
 
 class VirtualVCF:
@@ -24,6 +25,7 @@ class VirtualVCF:
         phased: bool | None = True,
         large_format: bool | None = True,
         reference_dir: str | Path | None = None,
+        bed_intervals: BEDIntervals | None = None,
     ):
         """
         Initialize VirtualVCF object.
@@ -38,6 +40,8 @@ class VirtualVCF:
             phased (bool, optional): Phased or unphased genotypes. Defaults to True.
             large_format (bool, optional): Use large format VCF. Defaults to True.
             reference_dir (str or Path, optional): Path to reference file directory.
+            bed_intervals (BEDIntervals, optional): BED intervals to restrict variant generation.
+            bed_intervals (BEDIntervals, optional): BED intervals to restrict variant generation.
 
         Raises:
             ValueError: If num_samples or num_rows is less than 1.
@@ -67,6 +71,7 @@ class VirtualVCF:
         self.reference_dir = Path(reference_dir) if reference_dir else None
         self.reference_files = {}
         self.reference_metadata = {}
+        self.bed_intervals = bed_intervals
         self.alleles = ["A", "C", "G", "T"]
 
         # Setup
@@ -281,6 +286,14 @@ class VirtualVCF:
             # Generate and sort positions
             positions = self.random.sample(range(1, chromosome_length), self.num_rows)
             positions.sort()
+            # Filter positions to BED intervals if provided
+            if self.bed_intervals:
+                positions = self.bed_intervals.get_valid_positions(chromosome, positions)
+                # If no valid positions after filtering, skip this chromosome
+                if not positions:
+                    if reference_data:
+                        reference_data.close()
+                    continue
             # Generate a VCF row for each position
             for p in positions:
                 yield self._generate_vcf_row(chromosome, p, reference_data)

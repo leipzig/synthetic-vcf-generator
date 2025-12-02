@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 
 from synthetic_vcf_generator import version
+from synthetic_vcf_generator.bed_parser import BEDIntervals
 from synthetic_vcf_generator.vcf_generator import (
     batch_synthetic_vcf_data,
     synthetic_vcf_data,
@@ -198,6 +199,13 @@ def main(
         help="Path to imported refernce directory.",
         exists=True,
     ),
+    bed_file: Path = typer.Option(
+        None,
+        "--bed-file",
+        "-b",
+        help="Path to BED file to restrict variant generation to specific regions.",
+        exists=True,
+    ),
 ) -> None:
     """
     Generate synthetic VCF data
@@ -230,6 +238,7 @@ def main(
         phased=phased,
         large_format=large_format,
         reference_dir_path=reference_dir,
+        bed_intervals=BEDIntervals(bed_file) if bed_file else None,
     )
 
 
@@ -300,6 +309,13 @@ def generate_batch(
         help="Path to imported refernce directory.",
         exists=True,
     ),
+    bed_file: Path = typer.Option(
+        None,
+        "--bed-file",
+        "-b",
+        help="Path to BED file to restrict variant generation to specific regions.",
+        exists=True,
+    ),
     num_threads: int = typer.Option(
         os.cpu_count(), "--num-threads", "-t", help="Number of threads."
     ),
@@ -340,6 +356,7 @@ def generate_batch(
         phased=phased,
         large_format=large_format,
         reference_dir_path=reference_dir,
+        bed_intervals=BEDIntervals(bed_file) if bed_file else None,
         num_threads=num_threads,
     )
 

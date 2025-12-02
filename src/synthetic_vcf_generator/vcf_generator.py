@@ -93,6 +93,7 @@ def synthetic_vcf_data(
     phased,
     large_format,
     reference_dir_path,
+    bed_intervals,
 ):
     """
     Generates synthetic VCF data and writes it to either a file or standard output.
@@ -120,6 +121,7 @@ def synthetic_vcf_data(
         phased=phased,
         large_format=large_format,
         reference_dir=reference_dir_path,
+        bed_intervals=bed_intervals,
     )
 
     if synthetic_vcf_path is None:
@@ -142,6 +144,7 @@ def batch_synthetic_vcf_data(
     phased,
     large_format,
     reference_dir_path,
+    bed_intervals,
     num_threads,
 ):
     """
@@ -177,6 +180,7 @@ def batch_synthetic_vcf_data(
         phased=phased,
         large_format=large_format,
         reference_dir=reference_dir_path,
+        bed_intervals=bed_intervals,
     )
 
     ext = ".vcf.gz" if output_type in {"gzip", "bgzip"} else ".vcf"
