@@ -7,6 +7,7 @@ import multiprocessing
 import subprocess
 import random
 import csv
+import math
 from pathlib import Path
 from collections import defaultdict
 try:
@@ -19,6 +20,72 @@ except ImportError:
 from synthetic_vcf_generator.vcf_model import VCFModel
 from synthetic_vcf_generator.virtual_vcf import VirtualVCF
 from synthetic_vcf_generator.bed_parser import BEDIntervals
+
+
+def randomize_info_values(rng, variant_count):
+    """Generate randomized INFO field values."""
+    return {
+        'DP': rng.randint(30, 200),  # Depth: 30-200
+        'MQ': round(rng.uniform(50.0, 60.0), 1),  # Mapping quality: 50-60
+        'MQRankSum': round(rng.uniform(-2.0, 2.0), 2),  # Mapping quality rank sum: -2 to 2
+        'QD': round(rng.uniform(15.0, 30.0), 1),  # Quality by depth: 15-30
+        'ReadPosRankSum': round(rng.uniform(-2.0, 2.0), 2),  # Read position rank sum: -2 to 2
+        'FS': round(rng.uniform(0.0, 10.0), 1),  # Fisher strand: 0-10
+        'SOR': round(rng.uniform(0.5, 2.0), 1),  # Strand odds ratio: 0.5-2.0
+        'MOSAIC': round(rng.uniform(0.0, 0.05), 2),  # Mosaic fraction: 0-0.05
+        'SoftClipRatio': round(rng.uniform(0.0, 0.02), 3),  # Soft clip ratio: 0-0.02
+        'FractionInformativeReads': round(rng.uniform(0.85, 0.98), 2),  # Fraction informative: 0.85-0.98
+        'PS': rng.randint(100, 1000) + variant_count * 10,  # Phase set: varies
+    }
+
+
+def randomize_format_values(rng, gt, dp_base=None):
+    """Generate randomized FORMAT field values based on genotype."""
+    if dp_base is None:
+        dp_base = rng.randint(30, 200)
+    
+    # Allelic depths - vary based on genotype and depth
+    if gt in ["0/0", "0|0", "0"]:
+        ref_depth = int(dp_base * rng.uniform(0.85, 0.95))
+        alt_depth = dp_base - ref_depth
+        ad = f"{ref_depth},{alt_depth}"
+        af = f"{round(rng.uniform(0.90, 0.98), 2)},{round(rng.uniform(0.02, 0.10), 2)}"
+        pl = f"0,{rng.randint(100, 150)},{rng.randint(800, 1000)}"
+    elif gt in ["1/1", "1|1", "1"]:
+        ref_depth = int(dp_base * rng.uniform(0.05, 0.15))
+        alt_depth = dp_base - ref_depth
+        ad = f"{ref_depth},{alt_depth}"
+        af = f"{round(rng.uniform(0.02, 0.10), 2)},{round(rng.uniform(0.90, 0.98), 2)}"
+        pl = f"{rng.randint(1000, 1200)},{rng.randint(120, 180)},0"
+    else:  # heterozygous
+        ref_depth = int(dp_base * rng.uniform(0.40, 0.60))
+        alt_depth = dp_base - ref_depth
+        ad = f"{ref_depth},{alt_depth}"
+        af = f"{round(rng.uniform(0.40, 0.50), 2)},{round(rng.uniform(0.50, 0.60), 2)}"
+        pl = f"0,{rng.randint(100, 150)},{rng.randint(800, 1000)}"
+    
+    return {
+        'AD': ad,
+        'DP': str(dp_base),
+        'AF': af,
+        'GQ': str(rng.randint(80, 99)),  # Genotype quality: 80-99
+        'PL': pl,
+        'GP': f"{rng.randint(5, 15)},{rng.randint(0, 5)},{rng.randint(980, 995)}",  # Genotype posterior
+        'F1R2': f"{rng.randint(25, 40)},{rng.randint(20, 35)}",  # Forward reads ref/alt
+        'F2R1': f"{rng.randint(20, 30)},{rng.randint(15, 25)}",  # Reverse reads ref/alt
+        'SB': f"{rng.randint(0, 5)},{rng.randint(0, 5)},{rng.randint(35, 45)},{rng.randint(15, 25)}",  # Strand bias
+        'MB': str(round(rng.uniform(0.08, 0.15), 2)),  # Mapping bias: 0.08-0.15
+        'SQ': str(round(rng.uniform(25.0, 32.0), 1)),  # Sequence quality: 25-32
+        'PRI': str(rng.randint(40, 60)),  # Priority: 40-60
+        'QL': str(round(rng.uniform(0.80, 0.95), 2)),  # Quality likelihood: 0.80-0.95
+        'JAD': f"{rng.randint(60, 80)},{rng.randint(40, 60)}",  # Joint allelic depth
+        'JAF': f"{round(rng.uniform(0.10, 0.20), 2)},{round(rng.uniform(0.30, 0.40), 2)}",  # Joint allele frequency
+        'JDP': str(rng.randint(100, 140)),  # Joint depth: 100-140
+        'JGQ': str(rng.randint(90, 99)),  # Joint genotype quality: 90-99
+        'JPL': f"0,{rng.randint(130, 160)},{rng.randint(1100, 1200)}",  # Joint phred likelihood
+        'JQL': str(round(rng.uniform(0.80, 0.95), 2)),  # Joint quality likelihood
+        'JVQL': str(round(rng.uniform(0.80, 0.95), 2)),  # Joint variant quality likelihood
+    }
 
 def generate_ukbb_vcf(
     model_vcf_path: str,
@@ -73,6 +140,12 @@ def generate_ukbb_vcf(
     # Generate UUID for sample name if not provided
     if sample_uuid is None:
         sample_uuid = str(uuid.uuid4())
+    
+    # Create a random number generator for this sample (for reproducibility)
+    if seed is not None:
+        rng = random.Random(seed)
+    else:
+        rng = random.Random()
     
     # Assign sex if not provided (use UUID hash for independent randomness)
     if sex is None:
@@ -171,6 +244,9 @@ def generate_ukbb_vcf(
             # Build UKBB INFO string with all required fields
             ukbb_info = []
             
+            # Generate randomized INFO values
+            info_vals = randomize_info_values(rng, variant_count)
+            
             # AC, AF, AN - allele count/frequency
             if 'AF' in info_fields:
                 af_val = float(info_fields['AF'])
@@ -178,23 +254,30 @@ def generate_ukbb_vcf(
                 ukbb_info.append(f"AC={ac_val}")
                 ukbb_info.append(f"AF={af_val:.2f}")
             else:
-                ukbb_info.append("AC=1")
-                ukbb_info.append("AF=0.50")
+                # Randomize AC/AF based on genotype
+                if gt in ["0/0", "0|0", "0"]:
+                    ac_val = rng.randint(0, 1)
+                    af_val = round(ac_val / 2.0, 2)
+                elif gt in ["1/1", "1|1", "1"]:
+                    ac_val = rng.randint(1, 2)
+                    af_val = round(ac_val / 2.0, 2)
+                else:
+                    ac_val = rng.randint(1, 2)
+                    af_val = round(rng.uniform(0.40, 0.60), 2)
+                ukbb_info.append(f"AC={ac_val}")
+                ukbb_info.append(f"AF={af_val:.2f}")
             ukbb_info.append("AN=2")
             
-            # DP - depth
-            if 'DP' in info_fields:
-                ukbb_info.append(f"DP={info_fields['DP']}")
-            else:
-                ukbb_info.append("DP=80")
+            # DP - depth (randomized)
+            ukbb_info.append(f"DP={info_vals['DP']}")
             
-            # Quality metrics
-            ukbb_info.append("MQ=58.2")
-            ukbb_info.append("MQRankSum=0.72")
-            ukbb_info.append("QD=25.3")
-            ukbb_info.append("ReadPosRankSum=0.15")
-            ukbb_info.append("FS=3.2")
-            ukbb_info.append("SOR=1.1")
+            # Quality metrics (randomized)
+            ukbb_info.append(f"MQ={info_vals['MQ']}")
+            ukbb_info.append(f"MQRankSum={info_vals['MQRankSum']}")
+            ukbb_info.append(f"QD={info_vals['QD']}")
+            ukbb_info.append(f"ReadPosRankSum={info_vals['ReadPosRankSum']}")
+            ukbb_info.append(f"FS={info_vals['FS']}")
+            ukbb_info.append(f"SOR={info_vals['SOR']}")
             
             # UKBB-specific fields
             ukbb_info.append(f"ALLELE_ID=A{variant_count+1}")
@@ -235,15 +318,15 @@ def generate_ukbb_vcf(
             ukbb_info.append(f"HML={hml}")
             
             ukbb_info.append("JIDS=S1")
-            ukbb_info.append("MOSAIC=0.02")
-            ukbb_info.append("SoftClipRatio=0.01")
-            ukbb_info.append("FractionInformativeReads=0.95")
+            ukbb_info.append(f"MOSAIC={info_vals['MOSAIC']}")
+            ukbb_info.append(f"SoftClipRatio={info_vals['SoftClipRatio']}")
+            ukbb_info.append(f"FractionInformativeReads={info_vals['FractionInformativeReads']}")
             
-            # Optional flags
-            if variant_count % 3 == 0:
+            # Optional flags (randomized probability)
+            if rng.random() < 0.3:  # 30% chance of Recombinant flag
                 ukbb_info.append("Recombinant")
             
-            ukbb_info.append(f"PS={100 + variant_count * 10}")
+            ukbb_info.append(f"PS={info_vals['PS']}")
             ukbb_info.append(f"EVENT=E{variant_count+1}")
             
             # EVENTTYPE
@@ -259,6 +342,9 @@ def generate_ukbb_vcf(
             # Use the format string from model
             format_fields = format_string.split(':')
             
+            # Generate randomized format values
+            format_vals = randomize_format_values(rng, gt, info_vals['DP'])
+            
             # Generate values for each format field
             format_values = []
             for field in format_fields:
@@ -270,67 +356,53 @@ def generate_ukbb_vcf(
                     else:
                         format_values.append(gt)  # Diploid: already formatted
                 elif field == "AD":
-                    # Allelic depths
-                    if gt in ["0/0", "0|0", "0"]:
-                        format_values.append("45,5")
-                    elif gt in ["1/1", "1|1", "1"]:
-                        format_values.append("5,45")
-                    else:
-                        format_values.append("35,35")
+                    format_values.append(format_vals['AD'])
                 elif field == "DP":
-                    format_values.append("80")
+                    format_values.append(format_vals['DP'])
                 elif field == "AF":
-                    if gt in ["0/0", "0|0", "0"]:
-                        format_values.append("0.93,0.07")
-                    elif gt in ["1/1", "1|1", "1"]:
-                        format_values.append("0.07,0.93")
-                    else:
-                        format_values.append("0.44,0.56")
+                    format_values.append(format_vals['AF'])
                 elif field == "GQ":
-                    format_values.append("99")
+                    format_values.append(format_vals['GQ'])
                 elif field == "PL":
-                    if gt in ["0/0", "0|0", "0"]:
-                        format_values.append("0,120,890")
-                    elif gt in ["1/1", "1|1", "1"]:
-                        format_values.append("1120,145,0")
-                    else:
-                        format_values.append("0,120,890")
+                    format_values.append(format_vals['PL'])
                 elif field == "GP":
-                    format_values.append("10,0,990")
+                    format_values.append(format_vals['GP'])
                 elif field == "F1R2":
-                    format_values.append("32,28")
+                    format_values.append(format_vals['F1R2'])
                 elif field == "F2R1":
-                    format_values.append("25,20")
+                    format_values.append(format_vals['F2R1'])
                 elif field == "SB":
-                    format_values.append("0,1,39,20")
+                    format_values.append(format_vals['SB'])
                 elif field == "MB":
-                    format_values.append("0.12")
+                    format_values.append(format_vals['MB'])
                 elif field == "SQ":
-                    format_values.append("28.5")
+                    format_values.append(format_vals['SQ'])
                 elif field == "PRI":
-                    format_values.append("50")
+                    format_values.append(format_vals['PRI'])
                 elif field == "PS":
-                    format_values.append(str(100 + variant_count * 10))
+                    format_values.append(str(info_vals['PS']))
                 elif field == "QL":
-                    format_values.append("0.88")
+                    format_values.append(format_vals['QL'])
                 elif field.startswith("J"):
-                    # Joint fields - simplified
+                    # Joint fields
                     if field == "JAD":
-                        format_values.append("70,50")
+                        format_values.append(format_vals['JAD'])
                     elif field == "JAF":
-                        format_values.append("0.15,0.32")
+                        format_values.append(format_vals['JAF'])
                     elif field == "JDP":
-                        format_values.append("120")
+                        format_values.append(format_vals['JDP'])
                     elif field == "JGQ":
-                        format_values.append("98")
+                        format_values.append(format_vals['JGQ'])
                     elif field == "JGT":
                         format_values.append(gt)
                     elif field == "JPL":
-                        format_values.append("0,145,1120")
+                        format_values.append(format_vals['JPL'])
                     elif field == "JQL":
-                        format_values.append("0.88")
+                        format_values.append(format_vals['JQL'])
                     elif field == "JVQL":
-                        format_values.append("0.88")
+                        format_values.append(format_vals['JVQL'])
+                    else:
+                        format_values.append(".")
                 else:
                     format_values.append(".")
             
@@ -351,7 +423,7 @@ def generate_ukbb_vcf(
 
 def _generate_single_vcf(args):
     """Worker function for multiprocessing batch generation."""
-    model_path, bed_path, output_dir, num_rows, seed, index = args
+    model_path, bed_path, output_dir, num_rows, seed, index, sample_sheet_path, sample_sheet_lock = args
     sample_uuid = str(uuid.uuid4())
     output_path = Path(output_dir) / f"{sample_uuid}.vcf"
     
@@ -392,6 +464,28 @@ def _generate_single_vcf(args):
             return (False, sample_uuid, None, None, None, None, sample_seed, f"Compression/indexing error: {e.stderr}")
         except Exception as e:
             return (False, sample_uuid, None, None, None, None, sample_seed, f"Compression/indexing exception: {str(e)}")
+        
+        # Append to sample sheet immediately
+        if sample_sheet_path and sample_sheet_lock:
+            sample_data = {
+                'sample_uuid': sample_uuid,
+                'vcf_file': f"{sample_uuid}.vcf.gz",
+                'num_variants': variant_count,
+                'sex': sex,
+                'type': 'exome' if is_exome else 'genome',
+                'chrX_variants': variant_counts_by_chrom.get('chrX', 0),
+                'chrY_variants': variant_counts_by_chrom.get('chrY', 0),
+                'seed': sample_seed,
+            }
+            
+            # Thread-safe append to CSV
+            with sample_sheet_lock:
+                file_exists = Path(sample_sheet_path).exists()
+                with open(sample_sheet_path, 'a', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=['sample_uuid', 'vcf_file', 'num_variants', 'sex', 'type', 'chrX_variants', 'chrY_variants', 'seed'])
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerow(sample_data)
         
         return (True, sample_uuid, variant_count, sex, variant_counts_by_chrom, is_exome, sample_seed, None)
     except Exception as e:
@@ -456,16 +550,29 @@ def generate_batch_ukbb_vcf(
         json.dump(batch_metadata, f, indent=2)
     print(f"Batch metadata written to {metadata_path}")
     
-    # Prepare arguments for workers
+    # Initialize sample sheet with header
+    sample_sheet_path = output_path / "sample_sheet.csv"
+    
+    # Create sample sheet with header
+    with open(sample_sheet_path, 'w', newline='') as f:
+        fieldnames = ['sample_uuid', 'vcf_file', 'num_variants', 'sex', 'type', 'chrX_variants', 'chrY_variants', 'seed']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+    print(f"Sample sheet initialized at {sample_sheet_path} (will be updated in real-time)")
+    
+    # Create a Manager for shared lock (required for multiprocessing)
+    manager = multiprocessing.Manager()
+    sample_sheet_lock = manager.Lock()
+    
+    # Prepare arguments for workers (include sample sheet path and lock)
     args_list = [
-        (model_vcf_path, bed_file_path, output_path, num_rows, seed, i)
+        (model_vcf_path, bed_file_path, output_path, num_rows, seed, i, str(sample_sheet_path), sample_sheet_lock)
         for i in range(num_vcfs)
     ]
     
     # Generate VCFs in parallel
     success_count = 0
     failed_count = 0
-    sample_sheet_data = []
     
     with multiprocessing.Pool(num_threads) as pool:
         if HAS_TQDM:
@@ -483,34 +590,16 @@ def generate_batch_ukbb_vcf(
                 if (i + 1) % 1000 == 0:
                     print(f"Generated {i + 1:,}/{num_vcfs:,} VCF files...")
     
+    # Count successes and failures
     for result in results:
         success, uuid_val, variant_count, sex, variant_counts_by_chrom, is_exome, sample_seed, error = result
         if success:
             success_count += 1
-            # Add to sample sheet
-            sample_sheet_data.append({
-                'sample_uuid': uuid_val,
-                'vcf_file': f"{uuid_val}.vcf.gz",
-                'num_variants': variant_count,
-                'sex': sex,
-                'type': 'exome' if is_exome else 'genome',
-                'chrX_variants': variant_counts_by_chrom.get('chrX', 0),
-                'chrY_variants': variant_counts_by_chrom.get('chrY', 0),
-                'seed': sample_seed,
-            })
         else:
             failed_count += 1
             print(f"Failed to generate {uuid_val}: {error}")
     
-    # Write sample sheet
-    sample_sheet_path = output_path / "sample_sheet.csv"
-    if sample_sheet_data:
-        with open(sample_sheet_path, 'w', newline='') as f:
-            fieldnames = ['sample_uuid', 'vcf_file', 'num_variants', 'sex', 'type', 'chrX_variants', 'chrY_variants', 'seed']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(sample_sheet_data)
-        print(f"\n✓ Sample sheet written to {sample_sheet_path}")
+    print(f"\n✓ Sample sheet updated in real-time at {sample_sheet_path}")
     
     print(f"\n✓ Generated {success_count:,} VCF files successfully")
     if failed_count > 0:
